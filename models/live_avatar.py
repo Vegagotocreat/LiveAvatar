@@ -13,6 +13,7 @@ from models.gaussian_pointclouds import GaussianPointclouds
 from rendering.renderer import GaussRenderer
 from visualization.vis import to_image
 from models.neural_head_net import NeuralHeadNet, load_model
+from utils.util import pad_to_square
 # from tto import TTO
 
 
@@ -65,7 +66,22 @@ class LiveAvatar():
         return 1.0 / (self._tock - self._tick)
 
     def _to_input(self, image: np.ndarray):
+        # Pad before resizing so rectangular inputs retain their face proportions.
+        image = pad_to_square(image)
         return self.transform(Image.fromarray(image)).to(self.net.device).unsqueeze(0)
+
+    def _to_keypoints(self, image: np.ndarray, keypoints):
+        """Map normalized image landmarks to the square used by _to_input."""
+        if keypoints is None:
+            return None
+        keypoints = torch.as_tensor(keypoints, dtype=torch.float32, device=self.net.device).clone()
+        if keypoints.ndim == 2:
+            keypoints = keypoints.unsqueeze(0)
+        h, w = image.shape[:2]
+        size = max(h, w)
+        keypoints[..., 0] = (keypoints[..., 0] * w + (size - w) // 2) / size
+        keypoints[..., 1] = (keypoints[..., 1] * h + (size - h) // 2) / size
+        return keypoints
 
     def set_identity(self, image: np.ndarray) -> None:
         self.identity_image = self._to_input(image)
@@ -88,19 +104,13 @@ class LiveAvatar():
         if self.embeddings is None:
             self.embeddings = self.set_identity(image)
         self.input_image = self._to_input(image)
-        if keypoints is not None:
-            keypoints = torch.tensor(keypoints).to(self.net.device)
-            if len(keypoints.shape) == 2:
-                keypoints = keypoints.unsqueeze(0)
+        keypoints = self._to_keypoints(image, keypoints)
         self.embeddings[-1]['ft_expr'] = self.net.encode_expressions(self.input_image, keypoints=keypoints)['ft_expr']
 
     def set_identity_and_expression(self, image: np.ndarray, keypoints=None) -> None:
         self.identity_image = self._to_input(image)
         self.input_image = self._to_input(image)
-        if keypoints is not None:
-            keypoints = torch.tensor(keypoints).to(self.net.device)
-            if len(keypoints.shape) == 2:
-                keypoints = keypoints.unsqueeze(0)
+        keypoints = self._to_keypoints(image, keypoints)
         with torch.no_grad():
             self.embeddings = [self.net.encode(self.input_image, keypoints=keypoints, pred_expr=True)]
             self.blend_weights = [1.0]

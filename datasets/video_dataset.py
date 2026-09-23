@@ -77,6 +77,7 @@ class VideoDataset(td.Dataset):
             reenact: bool = False,
             cross_video: bool = False,
             n_images_per_clip: int = 2,
+            same_clip_views: bool = False,
             p_flip_train: float = 0.3
     ):
         assert os.path.exists(root), f"{self.__class__.__name__} root path '{root}' does not exist!"
@@ -90,13 +91,14 @@ class VideoDataset(td.Dataset):
         self.reenact = reenact
         self.cross_video = cross_video
         self.n_images_per_clip = n_images_per_clip
+        self.same_clip_views = same_clip_views
 
         if filter is None:
             filter = {}
         self.filter = filter
 
         asset_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "../assets")
-        self._mirror_ids = np.loadtxt( os.path.join(asset_dir, "mediapipe_mirror_ids_obj.txt")).astype(int)
+        self._mirror_ids = np.loadtxt(os.path.join(asset_dir, "mediapipe_mirror_ids_obj.txt")).astype(int)
         self.p_flip = p_flip_train if train else 0
 
         self.train = train
@@ -193,6 +195,17 @@ class VideoDataset(td.Dataset):
         self.clip_azimuth_std = self.meta_data.groupby('clip_id').azimuth_std.mean()
         self.vid_azimuth_std = self.meta_data.groupby('vid_id').azimuth_std.mean()
 
+        if self.train and self.same_clip_views and self.n_images_per_clip > 1:
+            clip_sizes = self.meta_data.groupby('clip_id').size()
+            eligible_clip_ids = clip_sizes[clip_sizes >= self.n_images_per_clip].index
+            self.clip_azimuth_std = self.clip_azimuth_std.loc[
+                self.clip_azimuth_std.index.isin(eligible_clip_ids)
+            ]
+            if self.clip_azimuth_std.empty:
+                raise ValueError(
+                    f"No clip contains {self.n_images_per_clip} usable frames"
+                )
+
     def vid_name(self, clip_name):
         return "".join(clip_name.split('_')[:-1])
 
@@ -278,23 +291,42 @@ class VideoDataset(td.Dataset):
             flip = random.random() < self.p_flip
 
         samples = [self.get_sample(idx, flip=flip)]
+        selected_indices = {idx}
 
         if self.n_images_per_clip == 1:
             return samples
         else:
-            # is_same_clip = self.meta_data.clip_id == samples[0]['clip_id']
-            is_same_clip = self.meta_data.vid_id == samples[0]['vid_id']
+            if self.same_clip_views:
+                is_same_group = self.meta_data.clip_name == samples[0]['clip_name']
+            else:
+                is_same_group = self.meta_data.vid_id == samples[0]['vid_id']
+
             if self.reenact:
                 is_first_frame = self.meta_data.frame_id == 0
-                source_idx = np.where(is_same_clip & is_first_frame)[0][0]
+                source_idx = np.where(is_same_group & is_first_frame)[0][0]
+                if self.same_clip_views and source_idx == idx:
+                    candidates = self.meta_data[is_same_group & (self.meta_data.index != idx)]
+                    if not candidates.empty:
+                        idx = self._select_view(
+                            anchor=samples[0],
+                            candidates=candidates,
+                            mode="max_dist",
+                        )
+                        samples[0] = self.get_sample(idx)
                 samples.insert(0, self.get_sample(source_idx))
             else:
                 for i in range(self.n_images_per_clip-1):
+                    candidates = self.meta_data[is_same_group]
+                    if self.same_clip_views:
+                        unused_candidates = candidates[~candidates.index.isin(selected_indices)]
+                        if not unused_candidates.empty:
+                            candidates = unused_candidates
                     source_idx = self._select_view(
                         anchor=samples,
-                        candidates=self.meta_data[is_same_clip],
+                        candidates=candidates,
                         mode="dist_sample"
                     )
+                    selected_indices.add(source_idx)
                     _flip = flip
                     # _flip = random.random() < self.p_flip
                     # if random.random() < 0.20:
@@ -314,7 +346,7 @@ class VideoDataset(td.Dataset):
         image_path = pose_path.replace(self.pose_folder, self.image_folder).replace('_pose.txt', '.jpg')
         matted_path = pose_path.replace(self.pose_folder, self.matted_folder).replace('_pose.txt', '.png')
         seg_path = pose_path.replace(self.pose_folder, self.seg_folder).replace('_pose.txt', '.png')
-        alpha_path = pose_path.replace(self.pose_folder, self.alpha_folder).replace('_pose.txt', '.jpg')
+        alpha_path = pose_path.replace(self.pose_folder, self.alpha_folder).replace('_pose.txt', '.png')
 
         keypoints = np.loadtxt(keypoint_path)[:, :3]
 
@@ -442,4 +474,3 @@ class VideoDataset(td.Dataset):
                                                          w_iris=1.0,
                                                          radius=9)
         return sample
-

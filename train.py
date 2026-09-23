@@ -47,7 +47,7 @@ from torch.utils.tensorboard import SummaryWriter
 from training import base_training
 from rendering.renderer import GaussRenderer
 from models.neural_head_net import NeuralHeadNet
-from training.loss_utils import laplacian_loss_conv, symmetry_loss, regularization_loss
+from training.loss_utils import laplacian_loss_conv, symmetry_loss, regularization_loss, view_consistency_loss
 from utils.nn import to_numpy
 from utils import log
 from utils.util import crop_and_resize_from_keypoints
@@ -207,18 +207,18 @@ class AvatarTraining(base_training.Training):
         self.optimizer_pos = torch.optim.Adam([self.net.pos, self.net.scale], lr=0.001)
 
         if self.cfg.pred_expr:
-            cross_attn_gammas = [layer[0].gamma for layer in self.net.transformer.transformer.layers]
             # style_proj_layers = [layer[0].style_proj for layer in self.net.transformer.transformer.layers]
             # style_params = [layer.parameters() for layer in style_proj_layers]
             # style_params = list(itertools.chain(*style_params))
+            # The cross-attention gamma gates are already included in
+            # transformer.parameters(); do not add them a second time.
             opt_params_expr = (
                     list(self.net.enc_img.parameters()) +
                     list(self.net.dino_fusion.parameters()) +
                     list(self.net.dino_fusion_expr.parameters()) +
                     list(self.net.enc_expr.parameters()) +
                     list(self.net.transformer.parameters()) +
-                    list(self.net.P_id.parameters()) +
-                    cross_attn_gammas
+                    list(self.net.P_id.parameters())
             )
             self.optimizer = torch.optim.Adam(opt_params_expr, lr=lr)
             # if self.cfg.pred_expr:
@@ -282,6 +282,7 @@ class AvatarTraining(base_training.Training):
         msg_metrics = "loss={loss:.4f}: "
 
         if self.cfg.with_l1: msg_metrics += "l1={loss_l1:.3f} "
+        if self.cfg.with_mse: msg_metrics += "mse={loss_mse:.3f} "
         if self.cfg.with_l1_face: msg_metrics += "l1f={loss_l1_face:.3f} "
         if self.cfg.with_ssim: msg_metrics += "ssim={loss_ssim:.3f} "
         if self.cfg.with_ssim_face: msg_metrics += "ssimf={loss_ssim_face:.3f} "
@@ -310,6 +311,7 @@ class AvatarTraining(base_training.Training):
         msg_metrics = msg_metrics.format(
             loss=means.get('loss', -1),
             loss_l1=means.get('loss_l1', -1),
+            loss_mse=means.get('loss_mse', -1),
             loss_l1_face=means.get('loss_l1_face', -1),
             loss_lpips_face=means.get('loss_lpips_face', -1),
             loss_ssim=means.get('loss_ssim', -1),
@@ -396,7 +398,7 @@ class AvatarTraining(base_training.Training):
             self,
             target_images: torch.Tensor,
             results: dict,
-            pixel_weights: torch.Tensor,
+            pixel_weights: torch.Tensor | None,
             keypoints: torch.Tensor,
             pred_expr: bool
     ):
@@ -409,7 +411,8 @@ class AvatarTraining(base_training.Training):
         # to compute losses on render size
         if target_images.shape != pred_images.shape:
             target_images = K.geometry.resize(target_images, (H, W))
-            pixel_weights = K.geometry.resize(pixel_weights, (H, W))
+            if pixel_weights is not None:
+                pixel_weights = K.geometry.resize(pixel_weights, (H, W))
 
         kp2d = keypoints[..., :2] * torch.tensor([W, H]).to(self.device)
         targets_crop = crop_and_resize_from_keypoints(target_images, kp2d, output_size=(H, W))
@@ -425,6 +428,12 @@ class AvatarTraining(base_training.Training):
 
         if self.cfg.with_l1:
             losses['loss_l1'] = head_l1_loss(pred_images, target_images) * self.cfg.w_l1
+
+        if self.cfg.with_mse:
+            losses['loss_mse'] = (
+                F.mse_loss(pred_images, target_images, reduction='mean')
+                * self.cfg.w_mse
+            )
 
         if self.cfg.with_lpips:
             preds_resized = torch.nn.functional.interpolate(pred_images, size=224, mode="bilinear")
@@ -455,6 +464,15 @@ class AvatarTraining(base_training.Training):
         if self.cfg.with_reg:
             feature_maps = results['feature_maps']
             losses['loss_reg'] = regularization_loss(feature_maps, self.gpc_params, self.cfg.reg) * self.cfg.w_reg
+
+        if self.cfg.with_ca_param:
+            # `self.net` is a DDP wrapper after accelerator.prepare(); unwrap
+            # it before accessing the NeuralHeadNet helper.  The helper
+            # returns the mean L2 penalty over all cross-attention gates.
+            net = self.accelerator.unwrap_model(self.net)
+            losses['loss_ca_param'] = (
+                net.cross_attention_parameter_loss() * self.cfg.w_ca_param
+            )
 
         #######################
         # Arcface loss
@@ -500,6 +518,7 @@ class AvatarTraining(base_training.Training):
             loss_reg = torch.zeros(1, requires_grad=True, device=self.device),
             loss_ca_param = torch.zeros(1, requires_grad=True, device=self.device),
             loss_lapl=torch.zeros(1, requires_grad=True, device=self.device),
+            loss_mse=torch.zeros(1, requires_grad=True, device=self.device),
         )
 
         ##############################################
@@ -536,14 +555,23 @@ class AvatarTraining(base_training.Training):
             # keypoints_aligned.append(batch[view_id]['keypoints_aligned'])
             keypoints_aligned.append(batch[view_id]['keypoints'])
 
+        identity_images_list = None
+        if self.cfg.with_consist and not self.cfg.identity_only:
+            if len(batch) < 2:
+                raise ValueError("with_consist requires at least two images per clip")
+            # M1 is already results[0]; only run the extra identity view for M2.
+            identity_images_list = [batch[1]['input']]
+
         results = self.net(
             input_images,
             x_exp_list=expr_images,
             cameras_list=target_cameras,
             keypoints_list=keypoints_aligned,
+            identity_images_list=identity_images_list,
             gaussian_renderer=self.gaussian_render,
             is_train=is_train,
             pred_expr=_pred_expr,
+            identity_only=self.cfg.identity_only,
         )
 
         ##############################################
@@ -561,7 +589,7 @@ class AvatarTraining(base_training.Training):
             if is_eval and target_view_id == 0:
                 continue
             target_images: torch.Tensor = batch[target_view_id]['target']
-            face_weights: torch.Tensor = batch[target_view_id]['face_weights']
+            face_weights: torch.Tensor | None = batch[target_view_id].get('face_weights')
             losses = self._compute_losses(
                 target_images,
                 results[target_view_id],
@@ -571,6 +599,14 @@ class AvatarTraining(base_training.Training):
             )
             for k in losses.keys():
                 loss_dict[k] = loss_dict[k] + losses[k] / num_results
+
+        if self.cfg.with_consist:
+            canonical_maps = results[0].get('canonical_maps')
+            if canonical_maps is None:
+                raise RuntimeError("with_consist requires canonical maps from multiple views")
+            loss_dict['loss_consist'] = (
+                view_consistency_loss(canonical_maps) * self.cfg.w_consist
+            )
 
         # sum total loss
         for k in loss_dict.keys():
@@ -596,8 +632,23 @@ class AvatarTraining(base_training.Training):
                 prefix = "train" if is_train else "val"
                 self.writer.add_scalar(f"{prefix}/loss", log_dict['loss'], self.total_iter, walltime=self.total_training_time())
                 self.writer.add_scalar(f"{prefix}/l1", log_dict['loss_l1'], self.total_iter, walltime=self.total_training_time())
+                if self.cfg.with_mse:
+                    self.writer.add_scalar(
+                        f"{prefix}/mse", log_dict['loss_mse'], self.total_iter,
+                        walltime=self.total_training_time()
+                    )
                 self.writer.add_scalar(f"{prefix}/ssim", log_dict['loss_ssim'], self.total_iter, walltime=self.total_training_time())
                 self.writer.add_scalar(f"{prefix}/lpips", log_dict['loss_lpips'], self.total_iter, walltime=self.total_training_time())
+                if self.cfg.with_consist:
+                    self.writer.add_scalar(
+                        f"{prefix}/view", log_dict['loss_consist'], self.total_iter,
+                        walltime=self.total_training_time()
+                    )
+                if self.cfg.with_ca_param:
+                    self.writer.add_scalar(
+                        f"{prefix}/ca_param", log_dict['loss_ca_param'], self.total_iter,
+                        walltime=self.total_training_time()
+                    )
                 self.writer.add_scalar(f"{prefix}/psnr", log_dict.get('psnr', 0), self.total_iter, walltime=self.total_training_time())
                 # self.writer.add_scalars(prefix, log_dict, self.total_iter, walltime=self.total_training_time())
 
@@ -667,10 +718,13 @@ class AvatarTraining(base_training.Training):
                     gaussian_deltas=disp_gaussians,
                     # embeddings=self._vis.show_embeddings(input_images, embeddings, source_image_ids, max_images=8),
                     # random_id=self._vis.visualize_random_id(embeddings),
-                    interp_id=self._vis.visualize_interpolations(
+                )
+                # Identity interpolation needs two samples. A batch of one is
+                # useful for smoke tests, so omit only this optional figure.
+                if target_cameras[0].R.shape[0] >= 2:
+                    figures['interp_id'] = self._vis.visualize_interpolations(
                         embeddings, embeddings, idx1=0, idx2=1, camera1=target_cameras[0][0],
                         camera2=target_cameras[0][1])
-                )
                 if _pred_expr:
                     figures['random_expr'] = self._vis.visualize_random_expr(embeddings)
                     figures['expr_matrix'] = self._vis.create_expression_matrix(
@@ -701,6 +755,11 @@ if __name__ == '__main__':
     from accelerate import DistributedDataParallelKwargs
 
     cfg = tyro.extras.overridable_config_cli(default_configs)
+
+    if cfg.identity_only and cfg.pred_expr:
+        raise ValueError("identity_only and pred_expr cannot both be enabled")
+    if cfg.with_consist and cfg.n_images_per_clip < 2:
+        raise ValueError("with_consist requires n_images_per_clip >= 2")
 
     torch.cuda.empty_cache()
     torch.backends.cudnn.benchmark = cfg.cubench
@@ -765,6 +824,7 @@ if __name__ == '__main__':
     dataset_val = VFHQ(
         os.path.join(cfg.vfhq_root, 'test'),
         data_folder=cfg.vfhq_data_folder,
+        num_frames=cfg.frames_per_clip,
         transform=transform,
         train=False,
         mask_inputs=cfg.mask_inputs,
@@ -772,6 +832,8 @@ if __name__ == '__main__':
         return_face_weights=cfg.with_l1_face,
         background_color=cfg.background_color,
         n_images_per_clip=2,
+        same_clip_views=cfg.same_clip_views,
+        p_flip_train=cfg.p_flip_train,
         reenact=True,
     )
     dataset_train = VFHQ(
@@ -795,7 +857,9 @@ if __name__ == '__main__':
             min_azimuth_std=cfg.min_azimuth_std,
             min_azimuth_range=cfg.min_azimuth_range,
         ),
-        n_images_per_clip=cfg.n_images_per_clip
+        n_images_per_clip=cfg.n_images_per_clip,
+        same_clip_views=cfg.same_clip_views,
+        p_flip_train=cfg.p_flip_train,
     )
 
     dataloaders = {

@@ -150,6 +150,7 @@ class OfflineFaceTracker(VideoProcessor):
             interval: int = None,
             max_frame_count: int = None,
             max_clip_length: int = None,
+            adaptive_frame_sampling: bool = False,
     ):
 
         video, _ = get_images(video_path)
@@ -163,6 +164,15 @@ class OfflineFaceTracker(VideoProcessor):
 
         if max_clip_length is not None:
             frame_ids = frame_ids[:max_clip_length]
+
+        if adaptive_frame_sampling:
+            frame_count = len(frame_ids)
+            if frame_count < 200:
+                max_frame_count = 25
+            elif frame_count <= 300:
+                max_frame_count = 50
+            else:
+                max_frame_count = 75
 
         if max_frame_count is not None:
             frame_count = len(frame_ids)
@@ -265,6 +275,25 @@ class OfflineFaceTracker(VideoProcessor):
             seq_chunk=self._batch_size,
             progress=self._progress
         )
+
+        # RVM numbers its output sequentially; preserve the original sampled frame ids.
+        input_files = sorted(glob.glob(os.path.join(input_dir, '*.jpg')))
+        alpha_files = sorted(glob.glob(os.path.join(output_dir, '*.png')))
+        if len(alpha_files) != len(input_files):
+            raise RuntimeError(
+                f"Matting output count mismatch: {len(alpha_files)} alpha masks for "
+                f"{len(input_files)} input frames in {input_dir}"
+            )
+
+        temp_files = []
+        for alpha_file in alpha_files:
+            temp_file = alpha_file + '.tmp'
+            os.replace(alpha_file, temp_file)
+            temp_files.append(temp_file)
+
+        for temp_file, input_file in zip(temp_files, input_files):
+            frame_id = os.path.splitext(os.path.basename(input_file))[0]
+            os.replace(temp_file, os.path.join(output_dir, frame_id + '.png'))
 
     def run_face_parsing(self, input_dir: str, output_dir: str, overwrite: bool = True) -> None:
         if not os.path.exists(input_dir):
@@ -549,7 +578,7 @@ class OfflineFaceTracker(VideoProcessor):
         frame_ids = [int(self._parse_image_path(f)[1]) for f in pose_files]
 
         image_files = [self.get_path(frame_dir, i, '.jpg') for i in frame_ids]
-        alpha_files = [self.get_path(alpha_dir, i, '.jpg') for i in frame_ids]
+        alpha_files = [self.get_path(alpha_dir, i, '.png') for i in frame_ids]
         seg_files = [self.get_path(seg_dir, i, '.png') for i in frame_ids]
         landmark_files = [self.get_path(landmark_dir, i, '_landmarks.txt') for i in frame_ids]
         aligned_landmark_files = [self.get_path(landmark_dir, i, '_landmarks_aligned.txt') for i in frame_ids]
@@ -739,7 +768,8 @@ class OfflineFaceTracker(VideoProcessor):
             clip_id: int | str | None = None,
             overwrite: bool = False,
             show: bool = False,
-            wait: bool = False
+            wait: bool = False,
+            adaptive_frame_sampling: bool = False,
     ):
         if clip_name is None:
             clip_name = os.path.splitext(os.path.split(video_path)[1])[0]
@@ -758,7 +788,13 @@ class OfflineFaceTracker(VideoProcessor):
         image_dir = os.path.join(output_dir, 'images', output_sub_folder)
         landmark_dir = pose_dir
 
-        frame_ids = self.select_frames(video_path, interval, max_frame_count, max_clip_length)
+        frame_ids = self.select_frames(
+            video_path,
+            interval,
+            max_frame_count,
+            max_clip_length,
+            adaptive_frame_sampling=adaptive_frame_sampling,
+        )
 
         _, images = self.extract_images(video_path, frame_dir, frame_ids, overwrite=overwrite)
 

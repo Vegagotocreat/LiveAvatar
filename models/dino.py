@@ -16,7 +16,10 @@ def get_pretrained_dinov2(arch) -> torch.nn.Module:
     # backbone_arch = backbone_archs[arch]
     backbone_name = f"dinov2_{arch}"
 
-    model = torch.hub.load(repo_or_dir="facebookresearch/dinov2", model=backbone_name)
+    # Pin the branch explicitly so torch.hub can use the local cache without
+    # first querying GitHub for the repository's default branch. This matters
+    # when launching one worker per GPU on a node with restricted networking.
+    model = torch.hub.load(repo_or_dir="facebookresearch/dinov2:main", model=backbone_name)
     for p in model.parameters():
         p.requires_grad = False
     return model

@@ -60,6 +60,7 @@ class TrackWorker(Worker):
                     interval=self.cfg.frame_interval,
                     max_frame_count=self.cfg.max_frame_count,
                     max_clip_length=self.cfg.max_clip_length,
+                    adaptive_frame_sampling=self.cfg.adaptive_frame_sampling,
                     overwrite=self.cfg.overwrite,
                     show=self.cfg.show,
                     wait=self.cfg.wait
@@ -72,7 +73,7 @@ class TrackWorker(Worker):
 def run_multiprocessing(args):
     mp.set_start_method("spawn", force=True)
 
-    video_paths = os.listdir(args.video_dir)
+    video_paths = sorted(os.listdir(args.video_dir))
     job_queue = mp.Queue()
     # for job_data in load_data(json_path, args.st, args.nd):
     #     job_queue.put(job_data)
@@ -108,7 +109,7 @@ def run_singleprocessing_track(args):
                                       progress=args.progress,
                                       fov=args.fov,
                                       device=device)
-    video_paths = os.listdir(args.video_dir)
+    video_paths = sorted(os.listdir(args.video_dir))
 
     for idx in range(args.st, args.nd):
 
@@ -126,6 +127,7 @@ def run_singleprocessing_track(args):
             interval=args.frame_interval,
             max_frame_count=args.max_frame_count,
             max_clip_length=args.max_clip_length,
+            adaptive_frame_sampling=args.adaptive_frame_sampling,
             overwrite=args.overwrite,
             show=args.show,
             wait=args.wait
@@ -139,31 +141,35 @@ if __name__ == '__main__':
     def bool_str(x):
         return str(x).lower() in ['True', 'true', '1']
 
-    split = "test"
+    split = "train"
     file_dir = os.path.dirname(os.path.realpath(__file__))
     default_asset_dir = os.path.join(file_dir, "../assets")
-    default_data_dir = os.path.join(file_dir, "../../../data/datasets/VFHQ", split)
+    default_data_dir = "/data_16TB/liweijia/VFHQ/train"
+    default_video_dir = "/data_16TB/liweijia/VFHQ/VFHQ-512-new"
 
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--root', type=str, default=default_data_dir)
     parser.add_argument('--asset_dir', type=str, default=default_asset_dir)
-    parser.add_argument('--video_dir', type=str, default=None)
+    parser.add_argument('--video_dir', type=str, default=default_video_dir)
     parser.add_argument('--output_dir', type=str, default=None)
 
     # 7, 13, 24, 54
     parser.add_argument('--st', type=int, default=0)
-    parser.add_argument('--nd', type=int, default=4)
+    parser.add_argument('--nd', type=int, default=None)
     parser.add_argument('--overwrite', type=bool_str, default=True)
 
-    parser.add_argument('-g', '--num_gpus', type=int, default=1)
+    parser.add_argument('-g', '--num_gpus', type=int, default=4)
     parser.add_argument('-p', '--num_processes', type=int, default=1)
     parser.add_argument('-b', '--batchsize', default=8, type=int, metavar='N')
 
     parser.add_argument('--fov', type=float, default=30.0)
     parser.add_argument('--frame_interval', type=int, default=None)
-    parser.add_argument('--max_frame_count', type=int, default=24)
+    parser.add_argument('--max_frame_count', type=int, default=24,
+                        help='Fixed per-clip limit when adaptive_frame_sampling is disabled.')
     parser.add_argument('--max_clip_length', type=int, default=None)
+    parser.add_argument('--adaptive_frame_sampling', type=bool_str, default=True,
+                        help='Override max_frame_count: sample 25, 50, or 75 frames for clips with <200, 200-300, or >300 usable frames.')
 
     parser.add_argument('--show', type=bool_str, default=False)
     parser.add_argument('--wait', type=bool_str, default=False)

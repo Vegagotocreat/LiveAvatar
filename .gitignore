@@ -48,3 +48,28 @@ Thumbs.db
 *.mov
 *.wmv
 
+# VS Code 本地配置
+.vscode/
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# 运行输出
+outputs/
+outputs_test/
+
+# 训练检查点和模型权重
+checkpoints/
+*.pth
+*.pt
+*.ckpt
+*.onnx
+
+# 本地临时/链接文件
+direct-url.txt
+
+# 子项目或本地安装的大型依赖目录
+libs/
+pytorch3d/
+

@@ -83,7 +83,7 @@ class VideoProcessor():
         return os.path.join(self._pose_root, clip_name, self.format_frame_id(frame_id) + '_landmarks_aligned.txt')
 
     def get_alpha_path(self, clip_name, frame_id: int) -> str:
-        return os.path.join(self._alpha_root, clip_name, self.format_frame_id(frame_id) + '.jpg')
+        return os.path.join(self._alpha_root, clip_name, self.format_frame_id(frame_id) + '.png')
 
     def get_seg_path(self, clip_name, frame_id: int) -> str:
         return os.path.join(self._seg_root, clip_name, self.format_frame_id(frame_id) + '.png')
@@ -102,7 +102,7 @@ class VideoProcessor():
 
     def _to_alpha_path(self, img_path: str):
         clip_name, frame_id = self._parse_image_path(img_path)
-        return os.path.join(self._alpha_root, clip_name, frame_id + '.jpg')
+        return os.path.join(self._alpha_root, clip_name, frame_id + '.png')
 
     def _to_seg_path(self, img_path: str):
         clip_name, frame_id = self._parse_image_path(img_path)

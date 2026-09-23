@@ -252,6 +252,19 @@ def feature_repulsion_loss(features):
     # return torch.log(loss)
 
 
+def view_consistency_loss(feature_maps: list[torch.Tensor]) -> torch.Tensor:
+    """Average the Gaussian-map MSE over all pairs of identity views."""
+    if len(feature_maps) < 2:
+        raise ValueError("View consistency requires at least two feature maps")
+
+    pairwise_losses = [
+        F.mse_loss(feature_maps[i], feature_maps[j])
+        for i in range(len(feature_maps))
+        for j in range(i + 1, len(feature_maps))
+    ]
+    return torch.stack(pairwise_losses).mean()
+
+
 def regularization_loss(feature_maps: torch.Tensor, gpc_params: GPCParams, weights: RegularizationWeights) -> torch.Tensor:
     loss_xyz = (feature_maps[:, gpc_params.coord_channels] ** 2).mean()
     loss_opac = (feature_maps[:, gpc_params.opacity_channels] ** 2).mean()
@@ -265,6 +278,5 @@ def regularization_loss(feature_maps: torch.Tensor, gpc_params: GPCParams, weigh
             weights.rot * loss_rot
     )
     return loss
-
 
 

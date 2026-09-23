@@ -295,11 +295,108 @@ class NeuralHeadNet(nn.Module):
 
         return results
 
+    def cross_attention_parameter_loss(self) -> torch.Tensor:
+        """Return an L2 penalty for the cross-attention residual gates.
+
+        The gates are scalar parameters, one per transformer attention layer.
+        Keeping this helper on the unwrapped network lets the training loop
+        use it transparently with Accelerate/DDP.
+        """
+        gammas = [layer[0].gamma for layer in self.transformer.transformer.layers]
+        if not gammas:
+            return self.base_map.new_zeros(())
+        return torch.stack([gamma.square().mean() for gamma in gammas]).mean()
+
     def encode(self, x: torch.Tensor, keypoints: torch.Tensor, pred_expr = False) -> dict:
         embeddings, dino_outputs = self.encode_identity(x)
         dino_outputs = None
         embeddings['ft_expr'] = self.encode_expressions(x, dino_outputs, keypoints=keypoints)['ft_expr'] if pred_expr else None
         return embeddings
+
+    def predict_canonical_maps(
+            self,
+            identity_images_list: list[torch.Tensor],
+            expression_features: torch.Tensor,
+    ) -> list[torch.Tensor]:
+        """Predict Gaussian offset maps while holding expression fixed."""
+        if not identity_images_list:
+            raise ValueError("Canonical-map prediction requires at least one identity view")
+
+        batch_size = len(identity_images_list[0])
+        if any(len(images) != batch_size for images in identity_images_list):
+            raise ValueError("All identity views must have the same batch size")
+        if len(expression_features) != batch_size:
+            raise ValueError("Expression features and identity views must have the same batch size")
+
+        identity_images = torch.cat(identity_images_list, dim=0)
+        identity_images = K.geometry.resize(
+            identity_images,
+            (self.params.image_size, self.params.image_size),
+        )
+        embeddings, _ = self.encode_identity(identity_images)
+        embeddings['ft_expr'] = torch.cat(
+            [expression_features] * len(identity_images_list),
+            dim=0,
+        )
+
+        feature_maps = self.decode(embeddings)['feature_maps']
+        return list(feature_maps.split(batch_size, dim=0))
+
+    def forward_identity_only(
+            self,
+            identity_images_list: list[torch.Tensor],
+            cameras_list: list[FoVPerspectiveCameras] | None = None,
+            gaussian_renderer: GaussRenderer | None = None,
+    ) -> list[dict]:
+        """Predict and render one canonical avatar per identity view."""
+        if not identity_images_list:
+            raise ValueError("Identity-only forward requires at least one image")
+
+        batch_size = len(identity_images_list[0])
+        if any(len(images) != batch_size for images in identity_images_list):
+            raise ValueError("All identity views must have the same batch size")
+
+        if cameras_list is None:
+            cameras_list = [None] * len(identity_images_list)
+        if len(cameras_list) != len(identity_images_list):
+            raise ValueError("Identity views and cameras must have the same length")
+
+        identity_images = torch.cat([
+            K.geometry.resize(images, (self.params.image_size, self.params.image_size))
+            for images in identity_images_list
+        ], dim=0)
+        embeddings, _ = self.encode_identity(identity_images)
+        embeddings['ft_expr'] = None
+        combined_result = self.decode(embeddings)
+
+        total_batch_size = len(identity_images)
+        results = []
+        for view_id, cameras in enumerate(cameras_list):
+            view_slice = slice(view_id * batch_size, (view_id + 1) * batch_size)
+            view_embeddings = {
+                name: value[view_slice]
+                if torch.is_tensor(value) and value.ndim > 0 and len(value) == total_batch_size
+                else value
+                for name, value in combined_result['embeddings'].items()
+            }
+            result = dict(
+                embeddings=view_embeddings,
+                base_maps=combined_result['base_maps'][view_slice],
+                feature_maps=combined_result['feature_maps'][view_slice],
+                pos=combined_result['pos'][view_slice],
+                scales=combined_result['scales'][view_slice],
+                pointclouds=combined_result['pointclouds'][view_slice],
+            )
+            if cameras is not None:
+                if gaussian_renderer is None:
+                    raise ValueError("Rendering identity views requires a Gaussian renderer")
+                result['pred_images'] = gaussian_renderer.render_images(
+                    result['pointclouds'], cameras
+                )
+            results.append(result)
+
+        results[0]['canonical_maps'] = [result['feature_maps'] for result in results]
+        return results
 
     def forward(
             self,
@@ -310,11 +407,24 @@ class NeuralHeadNet(nn.Module):
             gaussian_renderer: GaussRenderer | None = None,
             is_train=False,
             pred_expr=False,
+            identity_images_list: list[torch.Tensor] | None = None,
+            identity_only: bool = False,
     ):
+
+        if identity_only:
+            if pred_expr:
+                raise ValueError("identity_only and pred_expr cannot both be enabled")
+            identity_views = x_exp_list if x_exp_list is not None else [x]
+            return self.forward_identity_only(
+                identity_views,
+                cameras_list=cameras_list,
+                gaussian_renderer=gaussian_renderer,
+            )
 
         results = []
         x = K.geometry.resize(x, (self.params.image_size, self.params.image_size))
         embeddings, dino_outputs = self.encode_identity(x)
+        consistency_expression = None
 
         if False:
         # if not pred_expr:
@@ -370,12 +480,24 @@ class NeuralHeadNet(nn.Module):
                     shuffled_ids = np.random.permutation(range(len(x_exp)))
                     embeddings['ft_expr'] = embeddings['ft_expr'][shuffled_ids]
 
+                if identity_images_list is not None and consistency_expression is None:
+                    consistency_expression = embeddings['ft_expr']
+
                 exp_result = self.decode(embeddings)
 
                 if cameras is not None:
                     exp_result['pred_images'] = gaussian_renderer.render_images(exp_result['pointclouds'], cameras)
 
                 results.append(exp_result)
+
+        if identity_images_list is not None:
+            if consistency_expression is None:
+                raise RuntimeError("Identity consistency requires an expression input")
+            alternative_maps = self.predict_canonical_maps(
+                identity_images_list,
+                consistency_expression,
+            )
+            results[0]['canonical_maps'] = [results[0]['feature_maps'], *alternative_maps]
 
         return results
 

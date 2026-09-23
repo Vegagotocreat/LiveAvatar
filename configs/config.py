@@ -162,8 +162,11 @@ class Config:
 
     init: bool = False
     startup: bool = False
+    identity_only: bool = False  # bypass expression encoder and cross-attention
 
     # Recon
+    with_mse: bool = False
+    w_mse: float = 10.0
     with_l1: bool = True
     with_ssim: bool = True
     with_sil: bool = False
@@ -195,6 +198,9 @@ class Config:
     with_cam_pose: bool = False
 
     with_expr_reg: bool = False
+    # Regularize the learnable cross-attention residual gates.  Stage-1
+    # explicitly disables this because its expression/cross-attention branch
+    # is skipped.
     with_ca_param: bool = True
 
     w_l1: float = 0.5
@@ -205,6 +211,7 @@ class Config:
     w_ssim_face: float = 20.0
     w_coeff: float = 1.0
     w_reg: float = 0.1
+    w_ca_param: float = 0.01
     # w_lapl: float = 1000.0
     w_lapl: float = 1.0
     # w_consist: float = 1000.0
@@ -242,8 +249,10 @@ class Config:
     st: int = 0
     nd: int = 35000
     samples_per_epoch: int | None = 10000
-    frames_per_clip: int = 16
+    frames_per_clip: int = 75
     max_clip_length: int = 1000
+    same_clip_views: bool = False  # sample all views from one exact clip
+    p_flip_train: float = 0.3
     workers: int = 6
     remove_val_clips: bool = True
     mask_inputs: bool = False
@@ -270,6 +279,46 @@ default_configs = {
     "base": (
         "Base config",
         Config()
+    ),
+    "stage1": (
+        "Stage 1 paired identity training",
+        Config(
+            sessionname="stage1",
+            identity_only=True,
+            pred_expr=False,
+            n_images_per_clip=2,
+            same_clip_views=True,
+            with_consist=True,
+            with_reg=True,
+            with_sym=False,
+            with_ca_param=False,
+            with_l1_face=False,
+            with_arcface=False,
+            with_mse=True,
+        )
+    ),
+    "stage2": (
+        "Stage 2 expression training",
+        Config(
+            sessionname="stage2",
+            identity_only=False,
+            pred_expr=True,
+            n_images_per_clip=3,
+            same_clip_views=False,
+            p_flip_train=0.5,
+            with_consist=False,
+            with_sym=False,
+            with_ca_param=True,
+            with_arcface=True,
+            with_l1_face=True,
+            # The cited Stage-2 section does not require these extra terms.
+            with_reg=True,
+            with_mse=True,
+            # ↓↓↓ 新增以下三行 ↓↓↓
+            lr=2.5e-5,           # 从 1e-4 降到 2.5e-5（Stage-2 微调）
+            w_l1_face=1.0,       # 从 10.0 降到 1.0
+            w_arcface=0.5,       # 从 1.0 降到 0.5
+        )
     ),
     "debug": (
         "Debug config",

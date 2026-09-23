@@ -192,7 +192,7 @@ class BatchVis():
         from pytorch_msssim import SSIM
         self._ssim = SSIM(data_range=1.0, size_average=False, channel=3)
         self.psnr_metric = torchmetrics.image.PeakSignalNoiseRatio(data_range=1.0, reduction=None, dim=(1,2,3)).to(device)
-        self.lpips_model = torchmetrics.image.lpip.LearnedPerceptualImagePatchSimilarity(net_type='squeeze', normalize=True, reduction='none').to(device)
+        self.lpips_model = torchmetrics.image.lpip.LearnedPerceptualImagePatchSimilarity(net_type='squeeze', normalize=True, reduction='mean').to(device)
 
     def show_batch(
             self,
@@ -301,7 +301,8 @@ class BatchVis():
             pcs = self.net(inputs,
                            x_exp_list=[batch[0]['input'][:nimgs]],
                            keypoints_list=[batch[0]['keypoints'][:nimgs]],
-                           pred_expr=pred_expr)[0]['pointclouds']
+                           pred_expr=pred_expr,
+                           identity_only=self.net.train_cfg.identity_only)[0]['pointclouds']
 
             B, C, H, W = pcs._features.shape
             cropped_pcs = GaussianPointclouds(
@@ -375,8 +376,12 @@ class BatchVis():
         l1 = torch.nn.functional.l1_loss(preds, targets, reduction='none')
         l1_per_image = l1.reshape(l1.shape[0], -1).mean(dim=1) * 20 * 2.0
         ssim_per_image = self._ssim(preds, targets) #* (image_pixel_count / fg_pixels_per_image)
-        psnr_per_image = self.psnr_metric(preds, targets)
-        lpips_per_image = self.lpips_model(preds, targets)
+        # TorchMetrics squeezes a singleton batch to a scalar. Keep visualization
+        # metrics one-dimensional so label helpers work for batch size 1 as well.
+        psnr_per_image = self.psnr_metric(preds, targets).reshape(-1)
+        # The TorchMetrics LPIPS wrapper only supports batch reduction in the
+        # installed version; use its frozen network directly for per-image labels.
+        lpips_per_image = self.lpips_model.net(preds, targets, normalize=True).reshape(-1)
 
         frame_labels = [str_frame_info(batch[0]['clip_id'][i], batch[0]['clip_name'][i], batch[0]['fid'][i]) for i in source_image_ids]
         sources = add_label_to_images(sources, frame_labels, size=0.4)

@@ -95,11 +95,11 @@ class Attention(nn.Module):
     def forward(self, x, style=None):
         x_norm = self.norm(x)
         x = self.self_attn(x_norm)
-        # x = x + self.self_attn(x_norm)
-        # if style is not None:
-        #     x = x + torch.sigmoid(self.gamma) * self.cross_attn(x_norm, style)
-        # x = x + torch.sigmoid(self.gamma) * self.cross_attn(x, style)
-        x = x + 1. * self.cross_attn(x, style)
+        if style is not None:
+            # A learnable scalar gates the expression-conditioned residual.
+            # It is initialized to one so checkpoints produced before this
+            # gate was wired into the forward pass retain the old behavior.
+            x = x + self.gamma * self.cross_attn(x, style)
         return x
 
 
@@ -114,7 +114,7 @@ class Transformer(nn.Module):
                 FeedForward(dim, mlp_dim, dropout = dropout)
             ]))
 
-    def forward(self, x, style):
+    def forward(self, x, style=None):
         for attn, ff in self.layers:
             x = attn(x, style) + x
             x = ff(x) + x
@@ -188,7 +188,7 @@ class ViTAE(nn.Module):
         )
         return patch_pos_embed
 
-    def forward(self, img, style):
+    def forward(self, img, style=None):
         B, nc, w, h = img.shape
 
         x = self.to_patch_embedding_ident(img)
@@ -250,4 +250,3 @@ if __name__ == '__main__':
     # plt.imshow(to_numpy(recon[0].permute(1, 2, 0)))
     plt.imshow(to_numpy(recon[0, 0]))
     plt.show()
-

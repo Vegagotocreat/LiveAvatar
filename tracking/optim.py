@@ -11,7 +11,7 @@ from matplotlib.pyplot import cm
 import visualization.vis
 from tracking.landmarks import LM68_RIGID_IDS, lm478_to_lm68, tensor_lm478_to_lm68
 from utils.util import transform_camera, transform_landmarks_torch, stack_cameras, get_camera_azimuth, \
-    backproject_landmarks
+    backproject_landmarks, pairwise_backproject_landmarks
 from utils.nn import to_numpy
 # from visualization.viewer import O3DSceneViewer, pairwise_backproject_landmarks, make_pointcloud
 from visualization.vis import overlay_patches, show_image, draw_landmarks, draw_projected_landmarks, \
