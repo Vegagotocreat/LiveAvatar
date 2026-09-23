@@ -48,6 +48,9 @@ Thumbs.db
 *.mov
 *.wmv
 
+# Keep the personal showcase video in the repository
+!demo.mp4
+
 # VS Code 本地配置
 .vscode/
 
@@ -69,7 +72,10 @@ checkpoints/
 # 本地临时/链接文件
 direct-url.txt
 
+# 个人笔记和本地执行记录
+datasets/执行指令.md
+笔记.md
+
 # 子项目或本地安装的大型依赖目录
 libs/
 pytorch3d/
-
