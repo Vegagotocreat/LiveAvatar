@@ -6,9 +6,10 @@
 
 ## Demo
 
-下面的视频是我使用自己训练的模型生成的演示，已压缩为约 858 KB：
+## Demo
 
-[查看 Demo 视频（demo_compressed.mp4）](./demo_compressed.mp4) · [打开视频文件 / 下载](https://github.com/Vegagotocreat/LiveAvatar/raw/refs/heads/main/demo_compressed.mp4)
+下面的视频是我使用自己训练的模型生成的演示：
+https://github.com/user-attachments/assets/27f91478-d607-4bd4-9550-02e069a1871f
 
 ## 本仓库内容
 
