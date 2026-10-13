@@ -49,7 +49,7 @@ Thumbs.db
 *.wmv
 
 # Keep the personal showcase video in the repository
-!demo.mp4
+!/demo_compressed.mp4
 
 # VS Code 本地配置
 .vscode/

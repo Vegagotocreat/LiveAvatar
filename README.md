@@ -6,19 +6,14 @@
 
 ## Demo
 
-下面的视频是我使用自己训练的模型生成的演示：
+下面的视频是我使用自己训练的模型生成的演示，已压缩为约 858 KB：
 
-<video controls width="800" preload="metadata">
-  <source src="https://github.com/Vegagotocreat/LiveAvatar/raw/refs/heads/main/demo.mp4" type="video/mp4">
-  你的浏览器不支持内嵌视频。请[下载 demo.mp4](./demo.mp4)观看。
-</video>
-
-如果 GitHub 页面没有直接显示播放器，也可以点击这里打开视频：[demo.mp4](./demo.mp4)。
+[查看 Demo 视频（demo_compressed.mp4）](./demo_compressed.mp4) · [打开视频文件 / 下载](https://github.com/Vegagotocreat/LiveAvatar/raw/refs/heads/main/demo_compressed.mp4)
 
 ## 本仓库内容
 
 - 基于官方 LiveAvatar 项目的个人代码修改和实验记录。
-- 个人训练得到的 Demo 视频：[`demo.mp4`](./demo.mp4)。
+- 个人训练得到的 Demo 视频：[`demo_compressed.mp4`](./demo_compressed.mp4)。
 - 模型权重、训练检查点和运行输出未提交到仓库；请按照[官方项目说明](https://github.com/IntelLabs/LiveAvatar#readme)自行准备。
 
 ## 安装与使用
@@ -31,7 +26,7 @@
 - [摄像头流式运行](https://github.com/IntelLabs/LiveAvatar#running-the-streaming-server-webcam)
 - [训练流程](https://github.com/IntelLabs/LiveAvatar#training)
 
-本地修改可能依赖你自己的模型权重和配置；仓库中的 `demo.mp4` 仅用于展示结果，不代表已经包含可直接运行的 checkpoint。
+本地修改可能依赖你自己的模型权重和配置；仓库中的 `demo_compressed.mp4` 仅用于展示结果，不代表已经包含可直接运行的 checkpoint。
 
 ## 致谢与许可
 
