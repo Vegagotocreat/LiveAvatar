@@ -6,10 +6,11 @@
 
 ## Demo
 
-## Demo
-
 下面的视频是我使用自己训练的模型生成的演示：
-https://github.com/user-attachments/assets/27f91478-d607-4bd4-9550-02e069a1871f
+
+https://github.com/user-attachments/assets/df839dfa-6b0b-4dcc-bf1c-1f249779ad4b
+
+[下载视频文件](./demo_compressed.mp4) · [查看 Demo Issue](https://github.com/Vegagotocreat/LiveAvatar/issues/1)
 
 ## 本仓库内容
 
